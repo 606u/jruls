@@ -8,6 +8,7 @@
 #include <sys/param.h>
 #include <sys/jail.h>
 #include <sys/rctl.h>
+#include <sys/sysctl.h>
 #include <sysexits.h>
 #include <jail.h>
 #include <unistd.h>
@@ -155,6 +156,16 @@ usage(void)
 int
 main(int argc, char *argv[])
 {
+	int ena;
+	size_t ena_len = sizeof ena;
+	int rv = sysctlbyname("kern.racct.enable", &ena, &ena_len, 0, 0);
+	if (rv == -1 && errno == ENOENT)
+		errx(EX_UNAVAILABLE,
+		     "RACCT/RCTL support not compiled; see rctl(8)");
+	if (!ena)
+		errx(EX_UNAVAILABLE,
+		     "RACCT/RCTL support not enabled; enable using kern.racct.enable=1 tunable");
+
 	int count = INT_MAX, sleep_itv = 2;
 	int opt;
 

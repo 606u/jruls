@@ -5,7 +5,10 @@
 
 ## Usage
 
-Just run it; same as with `top`.
+RACCT/RCTL should be enabled: add `kern.racct.enable=1` to
+`/boot/loader.conf` and restart.
+
+Then just run it; same as with `top`.
 
     # ./jruls -d1
     jid  name                  cpu%     mem    r/s    read    w/s  writtn
