@@ -7,7 +7,6 @@ CFLAGS += -Wall -Wextra
 CFLAGS += -g -O0
 LDFLAGS += -g
 
-LDADD+=	-ljail
-DPADD+=	${LIBUTIL} ${LIBPROCSTAT} ${LIBKVM}
+LDADD+=	-ljail -lcurses
 
 .include <bsd.prog.mk>

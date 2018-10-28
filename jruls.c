@@ -1,7 +1,9 @@
 #include <sys/types.h>
+#include <curses.h>
 #include <err.h>
 #include <errno.h>
 #include <inttypes.h>
+#include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,6 +18,8 @@
 /* column widths */
 static int cw_jid = 3, cw_name = 20, cw_pct = 4, cw_mem = 6;
 static int cw_iops = 5, cw_iovol = 6, cw_cnt = 5;
+
+static int smart_terminal = 1;
 
 static void print_n(uint64_t v, int colwidth);
 static void print_nmp(uint64_t v, int colwidth);
@@ -44,6 +48,16 @@ static const struct metric all_metrics[] = {
 static const size_t tot_metrics =
 	sizeof (all_metrics) / sizeof (all_metrics[0]);
 static const struct metric *metrics[30];
+
+/* Rudimentary I/O abstraction to support smart and dump terminals */
+struct iofuncs {
+	/* x-prefix is a work-around as clear, attron... are macros */
+	int (*xclear)(void);
+	int (*xattron)(int attrs);
+	int (*xattroff)(int attrs);
+	int (*xprint)(const char *fmt, ...);
+	int (*xrefresh)(void);
+} io = { 0 };
 
 static const struct metric*
 find_metric(const char *name)
@@ -77,7 +91,7 @@ findval(const char *list,
 static void
 print_n(uint64_t v, int colwidth)
 {
-	printf("%*"PRIu64, colwidth, v);
+	io.xprint("%*"PRIu64, colwidth, v);
 }
 
 static void
@@ -92,26 +106,29 @@ print_nmp(uint64_t v, int colwidth)
 				 v / (1024 * 1024 * 1024.0));
 		else if (v > 9999 * 1024)
 			snprintf(buf, sizeof buf, "%.1fM",
-				      v / (1024 * 1024.0));
+				 v / (1024 * 1024.0));
 		else /* if (v > 9999) */
 			snprintf(buf, sizeof buf, "%.0fK",
-				      v / 1024.0);
+				 v / 1024.0);
 	}
-	printf("%*s", colwidth, buf);
+	io.xprint("%*s", colwidth, buf);
 }
 
 
 static void
 print_headers(void)
 {
-	printf("%*s  %-*s",
-	       cw_jid, "jid",
-	       cw_name, "name");
+	io.xclear();
+	io.xattron(A_BOLD);
+	io.xprint("%*s  %-*s",
+		  cw_jid, "jid",
+		  cw_name, "name");
 	const struct metric **it = metrics;
 	for (; *it; ++it) {
-		printf("  %*s", *(*it)->colwidth, (*it)->label);
+		io.xprint("  %*s", *(*it)->colwidth, (*it)->label);
 	}
-	puts("");
+	io.xprint("\n");
+	io.xattroff(A_BOLD);
 }
 
 
@@ -120,9 +137,9 @@ print_jail(int jid,
 	   const char *name)
 {
 	char q[MAXHOSTNAMELEN + 20], buf[4096];
-	printf("%*d  %-*s",
-	       cw_jid, jid,
-	       cw_name, name);
+	io.xprint("%*d  %-*s",
+		  cw_jid, jid,
+		  cw_name, name);
 
 	snprintf(q, sizeof q, "jail:%s:cputime", name);
 	int rv = rctl_get_racct(q, strlen(q) + 1,
@@ -132,16 +149,63 @@ print_jail(int jid,
 		 * pairs: cputime=##,datasize=##,... */
 		const struct metric **it = metrics;
 		for (; *it; ++it) {
-			printf("  ");
+ 			io.xprint("  ");
 			(*it)->print(findval(buf, (*it)->name),
 				     *(*it)->colwidth);
 		}
 	} else {
 		if (errno == ENOSYS)
 			err(EX_OSERR, "rctl_get_racct");
-		printf(": %s", strerror(errno));
+		io.xprint(": %s", strerror(errno));
 	}
-	puts("");
+	io.xprint("\n");
+}
+
+
+static int
+no_clear(void)
+{
+	return 0;
+}
+static int
+no_refresh(void)
+{
+	printf("\n");
+	fflush(stdout);
+	return 0;
+}
+static int
+no_attrtoggle(int attrs)
+{
+	(void)attrs;
+	return 0;
+}
+
+static void
+init_io(void)
+{
+	smart_terminal = getenv("TERM") != 0;
+	if (smart_terminal) {
+		smart_terminal = isatty(1);
+	}
+
+	if (smart_terminal) {
+		/* Initialize curses library */
+		setlocale(LC_ALL, "");
+		initscr();
+
+		io.xclear = &clear;
+		io.xattron = &attron;
+		io.xattroff = &attroff;
+		io.xprint = &printw;
+		io.xrefresh = &refresh;
+	} else { /* dump terminal */
+		io.xclear = &no_clear;
+		io.xattron = &no_attrtoggle;
+		io.xattroff = &no_attrtoggle;
+		io.xprint = &printf;
+		io.xrefresh = &no_refresh;
+	}
 }
 
 
@@ -212,6 +276,12 @@ main(int argc, char *argv[])
 	    jailparam_import_raw(&param[2], name, sizeof name) == -1)
 		errx(EX_OSERR, "jailparam_import_raw: %s", jail_errmsg);
 
+	init_io();
+
+	if (count == INT_MAX && !smart_terminal) {
+		count = 1;
+	}
+
 	do {
 		int jflags = 0, rv, n;
 		lastjid = n = 0;
@@ -230,6 +300,7 @@ main(int argc, char *argv[])
 		if (!n)
 			errx(EX_UNAVAILABLE, "no jails found");
 
+		io.xrefresh();
 		if (count > 1) {
 			sleep(sleep_itv);
 			puts("");
