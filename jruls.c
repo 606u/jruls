@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <locale.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +21,7 @@ static int cw_jid = 3, cw_name = 20, cw_pct = 4, cw_mem = 6;
 static int cw_iops = 5, cw_iovol = 6, cw_cnt = 5;
 
 static int smart_terminal = 1;
+static volatile int done = 0;
 
 static void print_n(uint64_t v, int colwidth);
 static void print_nmp(uint64_t v, int colwidth);
@@ -209,6 +211,23 @@ init_io(void)
 }
 
 
+static void
+restore_io(void)
+{
+	if (smart_terminal) {
+		endwin();
+	}
+}
+
+
+static void
+signal_done(int signo)
+{
+	(void)signo;
+	done = 1;
+}
+
+
 static int
 usage(void)
 {
@@ -276,7 +295,12 @@ main(int argc, char *argv[])
 	    jailparam_import_raw(&param[2], name, sizeof name) == -1)
 		errx(EX_OSERR, "jailparam_import_raw: %s", jail_errmsg);
 
+	if (signal(SIGINT, &signal_done) == SIG_ERR ||
+	    signal(SIGTERM, &signal_done) == SIG_ERR)
+		warn("signal");
+
 	init_io();
+	atexit(&restore_io);
 
 	if (count == INT_MAX && !smart_terminal) {
 		count = 1;
@@ -305,6 +329,6 @@ main(int argc, char *argv[])
 			sleep(sleep_itv);
 			puts("");
 		}
-	} while (--count > 0);
+	} while (--count > 0 && !done);
 	return 0;
 }
